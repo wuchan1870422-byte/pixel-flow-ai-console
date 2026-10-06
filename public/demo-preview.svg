@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 540" role="img" aria-label="城市夜景演示预览">
+  <defs>
+    <linearGradient id="sky" x2="0" y2="1">
+      <stop stop-color="#17264d"/>
+      <stop offset="0.58" stop-color="#43578d"/>
+      <stop offset="1" stop-color="#d79d83"/>
+    </linearGradient>
+    <linearGradient id="river" x2="0" y2="1">
+      <stop stop-color="#64729c"/>
+      <stop offset="1" stop-color="#1a2644"/>
+    </linearGradient>
+  </defs>
+  <path fill="url(#sky)" d="M0 0h960v540H0z"/>
+  <circle cx="728" cy="119" r="49" fill="#f6d6a1" opacity=".9"/>
+  <path fill="#243456" d="M0 307h105v-86h68v86h50V170h57v137h68v-102h55v102h73V116h62v191h59V191h82v116h51V246h57v61h74v-98h61v98h65v233H0z"/>
+  <path fill="#182843" d="M0 351h69v-72h89v72h80V233h67v118h57v-68h78v68h95V202h82v149h67v-97h69v97h55V275h73v76h79v189H0z"/>
+  <path fill="url(#river)" d="M0 405h960v135H0z"/>
+  <path stroke="#f1c797" stroke-width="4" opacity=".65" d="M620 415h160M689 430h88M641 447h176M706 466h110M677 489h147"/>
+  <path stroke="#7db9d6" stroke-width="3" opacity=".5" d="M105 431h206M170 453h178M103 482h244M438 425h135M413 474h199"/>
+  <g fill="#f5d8a6" opacity=".9">
+    <path d="M90 300h9v11h-9zm29 0h9v11h-9zm117-97h8v10h-8zm23 0h8v10h-8zm119 36h8v10h-8zm24 0h8v10h-8zm95-87h9v11h-9zm26 0h9v11h-9zm104 74h8v10h-8zm26 0h8v10h-8zm97 54h8v10h-8zm27 0h8v10h-8zm90-42h8v10h-8z"/>
+  </g>
+</svg>
