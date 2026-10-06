@@ -1,107 +1,72 @@
 import { Hono } from "hono";
+import { and, desc, eq, lt, sql } from "drizzle-orm";
+import { getDb } from "../../../../lib/db";
+import { tasks } from "../../../../lib/db/schema";
 
-type Status = "queued" | "processing" | "completed" | "failed";
-type Task = {
-  id: string;
-  fileName: string;
-  prompt: string;
-  status: Status;
-  createdAt: string;
-  attempts: number;
-  queuedAt?: number;
-  result?: string;
-};
-
-const cookieName = "pixelflow_demo_tasks";
+const cookieName = "pixelflow_session";
 const preview = "/demo-preview.svg";
 
-function seedTasks(): Task[] {
-  return [
-    { id: "tsk_8e1a", fileName: "shanghai-skyline.jpg", prompt: "cinematic dusk, editorial color grade", status: "completed", createdAt: "演示任务", attempts: 1, result: preview },
-    { id: "tsk_02b7", fileName: "portrait.png", prompt: "soft studio light, clean skin texture", status: "processing", createdAt: "演示任务", attempts: 1, queuedAt: Date.now() - 1000 },
-    { id: "tsk_f77c", fileName: "coffee.jpg", prompt: "warm morning light", status: "failed", createdAt: "演示任务", attempts: 2 },
-  ];
-}
-
-function isTask(value: unknown): value is Task {
-  if (!value || typeof value !== "object") return false;
-  const task = value as Partial<Task>;
-  return typeof task.id === "string" && typeof task.fileName === "string" &&
-    typeof task.prompt === "string" && typeof task.createdAt === "string" &&
-    typeof task.attempts === "number" &&
-    ["queued", "processing", "completed", "failed"].includes(task.status ?? "");
-}
-
-function readTasks(cookieHeader?: string): { tasks: Task[]; fresh: boolean } {
-  const encoded = cookieHeader?.split(";").map((part) => part.trim()).find((part) => part.startsWith(`${cookieName}=`))?.slice(cookieName.length + 1);
-  if (encoded && encoded.length <= 4000) {
-    try {
-      const parsed: unknown = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
-      if (Array.isArray(parsed) && parsed.length <= 8 && parsed.every(isTask)) return { tasks: parsed, fresh: false };
-    } catch { /* An invalid demo cookie starts a fresh session. */ }
-  }
-  return { tasks: seedTasks(), fresh: true };
-}
-
-function setTasksCookie(tasks: Task[], url: string) {
-  const retained = tasks.slice(0, 8);
-  let value = Buffer.from(JSON.stringify(retained)).toString("base64url");
-  while (value.length > 3800 && retained.length > 1) {
-    retained.pop();
-    value = Buffer.from(JSON.stringify(retained)).toString("base64url");
-  }
-  const secure = new URL(url).protocol === "https:" ? "; Secure" : "";
-  return `${cookieName}=${value}; Path=/api/tasks; Max-Age=604800; SameSite=Lax; HttpOnly${secure}`;
-}
-
-function displayTask(task: Task): Task {
-  if (!task.queuedAt || task.status === "failed") return task;
-  const elapsed = Date.now() - task.queuedAt;
-  if (elapsed < 500) return { ...task, status: "queued" };
-  if (elapsed < 2600) return { ...task, status: "processing" };
-  return { ...task, status: "completed", result: preview };
+function session(c: { req: { header(name: string): string | undefined; url: string }; header(name: string, value: string): void }) {
+  const raw = c.req.header("cookie")?.split(";").map((part) => part.trim()).find((part) => part.startsWith(`${cookieName}=`))?.slice(cookieName.length + 1);
+  if (raw && /^[0-9a-f-]{36}$/.test(raw)) return raw;
+  const id = crypto.randomUUID();
+  const secure = new URL(c.req.url).protocol === "https:" ? "; Secure" : "";
+  c.header("Set-Cookie", `${cookieName}=${id}; Path=/api/tasks; Max-Age=31536000; SameSite=Lax; HttpOnly${secure}`);
+  return id;
 }
 
 const api = new Hono()
-  .get("/api/tasks", (c) => {
-    const { tasks, fresh } = readTasks(c.req.header("cookie"));
-    if (fresh) c.header("Set-Cookie", setTasksCookie(tasks, c.req.url));
-    return c.json({ tasks: tasks.map(displayTask) });
+  .get("/api/tasks", async (c) => {
+    const sessionId = session(c);
+    const rows = await getDb().select().from(tasks).where(eq(tasks.sessionId, sessionId)).orderBy(desc(tasks.createdAt)).limit(100);
+    return c.json({ tasks: rows });
   })
   .post("/api/tasks", async (c) => {
     let body: unknown;
     try { body = await c.req.json(); } catch { return c.json({ error: "Invalid JSON" }, 400); }
     if (!body || typeof body !== "object") return c.json({ error: "Invalid task" }, 400);
-    const input = body as { fileName?: unknown; prompt?: unknown };
+    const input = body as { fileName?: unknown; prompt?: unknown; simulateFailure?: unknown };
     const fileName = typeof input.fileName === "string" ? input.fileName.trim().slice(0, 100) : "";
-    const prompt = typeof input.prompt === "string" ? input.prompt.trim().slice(0, 120) : "";
-    const task: Task = {
-      id: `tsk_${crypto.randomUUID().slice(0, 8)}`,
+    const prompt = typeof input.prompt === "string" ? input.prompt.trim().slice(0, 1000) : "";
+    if (!prompt) return c.json({ error: "Prompt is required" }, 400);
+    const [task] = await getDb().insert(tasks).values({
+      id: `tsk_${crypto.randomUUID()}`,
+      sessionId: session(c),
       fileName: fileName || "untitled-image.jpg",
-      prompt: prompt || "AI image enhancement",
-      status: "queued",
-      createdAt: "刚刚",
-      attempts: 1,
-      queuedAt: Date.now(),
-    };
-    const { tasks } = readTasks(c.req.header("cookie"));
-    c.header("Set-Cookie", setTasksCookie([task, ...tasks].slice(0, 8), c.req.url));
+      prompt,
+      simulateFailure: input.simulateFailure === true,
+    }).returning();
     return c.json({ task }, 201);
   })
-  .post("/api/tasks/:id/retry", (c) => {
-    const { tasks } = readTasks(c.req.header("cookie"));
-    const task = tasks.find((item) => item.id === c.req.param("id"));
-    if (!task) return c.json({ error: "Task not found" }, 404);
-    if (displayTask(task).status !== "failed") return c.json({ error: "Only failed tasks can be retried" }, 409);
-    task.status = "queued";
-    task.attempts += 1;
-    task.createdAt = "刚刚";
-    task.queuedAt = Date.now();
-    delete task.result;
-    c.header("Set-Cookie", setTasksCookie(tasks, c.req.url));
-    return c.json({ task });
+  .post("/api/tasks/sync", async (c) => {
+    const sessionId = session(c);
+    const db = getDb();
+    const now = new Date();
+    const processingCutoff = new Date(now.getTime() - 2600);
+    const queuedCutoff = new Date(now.getTime() - 500);
+
+    // Conditional updates make polling safe across concurrent Vercel instances.
+    await db.update(tasks).set({ status: "failed", error: "演示失败：可点击重试", updatedAt: now })
+      .where(and(eq(tasks.sessionId, sessionId), eq(tasks.status, "processing"), eq(tasks.simulateFailure, true), eq(tasks.retryCount, 0), lt(tasks.queuedAt, processingCutoff)));
+    await db.update(tasks).set({ status: "completed", outputImageUrl: preview, updatedAt: now })
+      .where(and(eq(tasks.sessionId, sessionId), eq(tasks.status, "processing"), lt(tasks.queuedAt, processingCutoff)));
+    await db.update(tasks).set({ status: "processing", updatedAt: now })
+      .where(and(eq(tasks.sessionId, sessionId), eq(tasks.status, "queued"), lt(tasks.queuedAt, queuedCutoff)));
+    return c.json({ ok: true });
+  })
+  .post("/api/tasks/:id/retry", async (c) => {
+    const sessionId = session(c);
+    const db = getDb();
+    const [task] = await db.update(tasks).set({
+      status: "queued", retryCount: sql`${tasks.retryCount} + 1`, error: null, outputImageUrl: null,
+      queuedAt: new Date(), updatedAt: new Date(),
+    }).where(and(eq(tasks.id, c.req.param("id")), eq(tasks.sessionId, sessionId), eq(tasks.status, "failed"))).returning();
+    if (task) return c.json({ task });
+    const [existing] = await db.select({ id: tasks.id }).from(tasks).where(and(eq(tasks.id, c.req.param("id")), eq(tasks.sessionId, sessionId))).limit(1);
+    return existing ? c.json({ error: "Only failed tasks can be retried" }, 409) : c.json({ error: "Task not found" }, 404);
   });
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 export async function GET(request: Request) { return api.fetch(request); }
 export async function POST(request: Request) { return api.fetch(request); }
